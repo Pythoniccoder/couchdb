@@ -23,6 +23,8 @@
     ensure_current/1,
     delete/1,
     exists/1,
+    deleted_dbs_info/1,
+    restore/2,
 
     get_dir/1,
 
@@ -172,7 +174,8 @@ create(#{} = Db0, Options) ->
     % Eventually DbPrefix will be HCA allocated. For now
     % we're just using the DbName so that debugging is easier.
     DbKey = erlfdb_tuple:pack({?ALL_DBS, DbName}, LayerPrefix),
-    DbPrefix = erlfdb_tuple:pack({?DBS, DbName}, LayerPrefix),
+    #{db_prefix_allocator := DBPrefixAllocator} = erlfdb_directory:root(),
+    DbPrefix = erlfdb_hca:allocate(DBPrefixAllocator, Tx),
     erlfdb:set(Tx, DbKey, DbPrefix),
 
     % This key is responsible for telling us when something in
@@ -314,10 +317,63 @@ delete(#{} = Db) ->
     } = ensure_current(Db),
 
     DbKey = erlfdb_tuple:pack({?ALL_DBS, DbName}, LayerPrefix),
-    erlfdb:clear(Tx, DbKey),
-    erlfdb:clear_range_startswith(Tx, DbPrefix),
+    DoRecovery = fabric_util:do_recovery(),
+    case DoRecovery of
+        true ->
+            {Mega, Secs, _} = os:timestamp(),
+            NowSecs = Mega * 1000000 + Secs,
+            DeletedDbKey = erlfdb_tuple:pack({?DELETED_DBS, DbName, NowSecs},
+                LayerPrefix),
+            erlfdb:set(Tx, DeletedDbKey, DbPrefix),
+            erlfdb:clear(Tx, DbKey);
+        false ->
+            erlfdb:clear(Tx, DbKey),
+            erlfdb:clear_range_startswith(Tx, DbPrefix)
+    end,
     bump_metadata_version(Tx),
     ok.
+
+
+deleted_dbs_info(#{} = Db0) ->
+    #{
+        name := DbName,
+        tx := Tx,
+        layer_prefix := LayerPrefix
+    } = ensure_current(Db0, false),
+
+    DeletedDbKey =  erlfdb_tuple:pack({?DELETED_DBS, DbName}, LayerPrefix),
+    DeletedDbs = erlfdb:wait(erlfdb:get_range_startswith(Tx, DeletedDbKey)),
+    lists:foldl(fun({DbKey, DbPrefix}, Acc) ->
+        DBInfo = get_info_wait(get_info_future(Tx, DbPrefix)),
+        {?DELETED_DBS, DbName, DeletedTS} =
+            erlfdb_tuple:unpack(DbKey, LayerPrefix),
+        [DeletedTS| Acc]
+    end, [], DeletedDbs).
+
+
+restore(#{} = Db0, [DeletedTS|_]) ->
+    #{
+        name := DbName,
+        tx := Tx,
+        layer_prefix := LayerPrefix
+    } = ensure_current(Db0, false),
+    DbKey = erlfdb_tuple:pack({?ALL_DBS, DbName}, LayerPrefix),
+    case erlfdb:wait(erlfdb:get(Tx, DbKey)) of
+        Bin when is_binary(Bin) -> throw({error, file_exists});
+        not_found -> ok
+    end,
+
+    DeleteDbKey =  erlfdb_tuple:pack({?DELETED_DBS, DbName,
+        binary_to_integer(DeletedTS)}, LayerPrefix),
+    case erlfdb:wait(erlfdb:get(Tx, DeleteDbKey)) of
+        not_found ->
+            throw({error, not_found});
+        DbPrefix ->
+            erlfdb:set(Tx, DbKey, DbPrefix),
+            erlfdb:clear(Tx, DeleteDbKey),
+            bump_metadata_version(Tx),
+            ok
+    end.
 
 
 exists(#{name := DbName} = Db) when is_binary(DbName) ->

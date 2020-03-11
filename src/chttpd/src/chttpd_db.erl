@@ -79,6 +79,10 @@ handle_request(#httpd{path_parts=[DbName|RestParts],method=Method}=Req)->
          end;
     {_, []} ->
         do_db_req(Req, fun db_req/2);
+    {'GET', [<<"_deleted_dbs_info">>|_]} ->
+        get_deleted_dbs_info_req(Req, DbName);
+    {'PUT', [<<"_restore">>|DeletedTS]} ->
+        restore_db_req(Req, DbName, DeletedTS);
     {_, [SecondPart|_]} ->
         Handler = chttpd_handlers:db_handler(SecondPart, fun db_req/2),
         do_db_req(Req, Handler)
@@ -392,6 +396,24 @@ create_db_req(#httpd{user_ctx=Ctx}=Req, DbName) ->
 delete_db_req(#httpd{user_ctx=Ctx}=Req, DbName) ->
     couch_httpd:verify_is_server_admin(Req),
     case fabric2_db:delete(DbName, [{user_ctx, Ctx}]) of
+        ok ->
+            send_json(Req, 200, {[{ok, true}]});
+        Error ->
+            throw(Error)
+    end.
+
+get_deleted_dbs_info_req(#httpd{user_ctx=Ctx}=Req, DbName) ->
+    couch_httpd:verify_is_server_admin(Req),
+    case fabric2_db:deleted_dbs_info(DbName, [{user_ctx, Ctx}]) of
+        {ok, Result} ->
+            send_json(Req, 200, ?JSON_ENCODE(Result));
+        Error ->
+            throw(Error)
+    end.
+
+restore_db_req(#httpd{user_ctx=Ctx}=Req, DbName, DeletedTS) ->
+    couch_httpd:verify_is_server_admin(Req),
+    case fabric2_db:restore(DbName, DeletedTS, [{user_ctx, Ctx}]) of
         ok ->
             send_json(Req, 200, {[{ok, true}]});
         Error ->

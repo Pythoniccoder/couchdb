@@ -17,6 +17,8 @@
     create/2,
     open/2,
     delete/2,
+    deleted_dbs_info/2,
+    restore/3,
 
     list_dbs/0,
     list_dbs/1,
@@ -208,6 +210,21 @@ delete(DbName, Options) ->
     if Resp /= ok -> Resp; true ->
         fabric2_server:remove(DbName)
     end.
+
+
+deleted_dbs_info(DbName, Options) ->
+    Options1 = lists:keystore(user_ctx, 1, Options, ?ADMIN_CTX),
+    Result = fabric2_fdb:transactional(DbName, Options1, fun(TxDb) ->
+        fabric2_fdb:deleted_dbs_info(TxDb)
+    end),
+    {ok, lists:reverse(Result)}.
+
+
+restore(DbName, DeleteTS, Options) ->
+    Options1 = lists:keystore(user_ctx, 1, Options, ?ADMIN_CTX),
+    fabric2_fdb:transactional(DbName, Options1, fun(TxDb) ->
+      fabric2_fdb:restore(TxDb, DeleteTS)
+    end).
 
 
 list_dbs() ->

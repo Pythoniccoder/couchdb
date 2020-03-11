@@ -23,6 +23,8 @@
 -export([validate_all_docs_args/2, validate_args/3]).
 -export([upgrade_mrargs/1]).
 -export([worker_ranges/1]).
+-export([do_recovery/0]).
+
 
 -compile({inline, [{doc_id_and_rev,1}]}).
 
@@ -81,6 +83,10 @@ timeout(Type, Default) ->
         "infinity" -> infinity;
         N -> list_to_integer(N)
     end.
+
+do_recovery() ->
+    config:get_boolean("couchdb",
+        "enable_database_recovery", false).
 
 log_timeout(Workers, EndPoint) ->
     CounterKey = [fabric, worker, timeouts],
